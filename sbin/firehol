@@ -5139,11 +5139,16 @@ docker_setup_chains() {
 		FIREHOL_DOCKER_SETUP_CHAINS=1
 
 		set_work_function "docker port mapping chain (port forwarding)"
+		iptables -t nat -N DOCKER-INGRESS
 		iptables -t nat -N DOCKER
 
 		set_work_function "docker inspection of local traffic for port mapping"
+		iptables -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER-INGRESS
 		iptables -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER
+		iptables -t nat -A OUTPUT -m addrtype --dst-type LOCAL -j DOCKER-INGRESS
 		iptables -t nat -A OUTPUT ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER
+		iptables -t nat -A POSTROUTING -o docker_gwbridge -m addrtype --src-type LOCAL -j MASQUERADE
+		iptables -t nat -A DOCKER-INGRESS -j RETURN
 
 		set_work_function "docker port mapping chain (filtering - accepts all ports mapped)"
 		iptables -t filter -N DOCKER
@@ -5154,9 +5159,15 @@ docker_setup_chains() {
 		iptables -t filter -A FORWARD -j DOCKER-USER
 
 		set_work_function "docker-isolation chain"
-		iptables -t filter -N DOCKER-ISOLATION
-		iptables -t filter -A DOCKER-ISOLATION -j RETURN
-		iptables -t filter -A FORWARD -j DOCKER-ISOLATION
+		iptables -t filter -N DOCKER-INGRESS
+		iptables -t filter -N DOCKER-ISOLATION-STAGE-1
+		iptables -t filter -N DOCKER-ISOLATION-STAGE-2
+		iptables -t filter -A FORWARD -j DOCKER-INGRESS
+		iptables -t filter -A FORWARD -j DOCKER-ISOLATION-STAGE-1
+		iptables -t filter -A DOCKER-INGRESS -j RETURN
+		iptables -t filter -A DOCKER-ISOLATION-STAGE-1 -j RETURN
+		iptables -t filter -A DOCKER-ISOLATION-STAGE-2 -j RETURN
+
 	fi
 }
 
@@ -5181,6 +5192,8 @@ docker_setup_interface() {
 
 		set_work_function "accept all traffic between containers"
 		iptables -t filter -A FORWARD -i "${iface}" -o "${iface}" -j ACCEPT
+		iptables -t filter -I DOCKER-ISOLATION-STAGE-1 -i "${iface}" ! -o "${iface}" -j DOCKER-ISOLATION-STAGE-2
+		iptables -t filter -I DOCKER-ISOLATION-STAGE-2 -o "${iface}" -j DROP
 	fi
 }
 
@@ -5199,6 +5212,17 @@ docker_bridge() {
 			iptables -t nat -A POSTROUTING -s "${subnet}" ! -o "${iface}" -j MASQUERADE
 		done
 	done
+}
+
+docker_service() {
+  local address="${1}" port="${2}"
+  
+  docker_setup_chains
+  
+  set_work_function "allow world to reach docker(-stack) service"
+  iptables -t nat -I DOCKER-INGRESS -p tcp -m tcp --dport "${port}" -j DNAT --to-destination "${address}:${port}"
+  iptables -t filter -I DOCKER-INGRESS -p tcp -m tcp --dport "${port}" -j ACCEPT
+  iptables -t filter -I DOCKER-INGRESS -p tcp -m state --state RELATED,ESTABLISHED -m tcp --sport "${port}" -j ACCEPT
 }
 
 # ------------------------------------------------------------------------------

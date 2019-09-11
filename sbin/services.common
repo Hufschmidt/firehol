@@ -47,6 +47,12 @@ server_distcc_ports="tcp/3632"
 client_dns_ports="any"
 server_dns_ports="udp/53 tcp/53"
 
+client_docker_manager_ports="default"
+server_docker_manager_ports="tcp/2377 tcp/7946 udp/7946 udp/4789"
+
+client_docker_worker_ports="default"
+server_docker_worker_ports="tcp/7946 udp/7946 udp/4789"
+
 client_echo_ports="default"
 server_echo_ports="tcp/7"
 
